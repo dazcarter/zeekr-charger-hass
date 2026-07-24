@@ -1,0 +1,42 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Zeekr Charger",
+        "description": "Connect to a Zeekr BLE wallbox charger. The serial number is printed on the charger label (e.g. EC0000XX...). If BLE discovery by name fails, provide the charger's BLE MAC address.",
+        "data": {
+          "serial": "Serial number",
+          "device_address": "BLE MAC address (optional, e.g. AA:BB:CC:DD:EE:FF)"
+        }
+      }
+    },
+    "error": {
+      "serial_too_short": "The serial number must be at least 8 characters.",
+      "invalid_mac": "Invalid BLE MAC address. Use AA:BB:CC:DD:EE:FF, AA-BB-CC-DD-EE-FF or AABBCCDDEEFF."
+    },
+    "abort": {
+      "already_configured": "This charger is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Zeekr Charger Options",
+        "data": {
+          "device_address": "BLE MAC address",
+          "solar_grid_power_entity": "Grid power sensor (signed W) for solar-surplus charging",
+          "grid_power_inverted": "Grid power sign is inverted (positive = exporting)",
+          "solar_battery_soc_entity": "Home battery state-of-charge sensor (optional)",
+          "response_timeout": "BLE response timeout",
+          "reconnect_max_attempts": "Max reconnect attempts before slow retry",
+          "reconnect_initial_delay": "Initial reconnect delay",
+          "reconnect_max_delay": "Maximum reconnect delay",
+          "heartbeat_stale_threshold": "Silence window before forcing a reconnect"
+        }
+      }
+    },
+    "error": {
+      "invalid_mac": "Invalid BLE MAC address. Use AA:BB:CC:DD:EE:FF, AA-BB-CC-DD-EE-FF or AABBCCDDEEFF."
+    }
+  }
+}
