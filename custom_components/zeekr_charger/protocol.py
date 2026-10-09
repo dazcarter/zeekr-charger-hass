@@ -164,20 +164,30 @@ class ParsedFrame:
 
 @dataclass
 class B5Telemetry:
-    """Full heartbeat telemetry (21-byte 0xB5 payload) during active charging.
+    """Full 0xB5 telemetry while a session is active.
 
-    Empirically confirmed layout:
+    Two layouts exist, told apart by payload length (see parse_b5_telemetry).
+    Both are little-endian, and bytes 2-9 and 12-13 sit in the same place:
+
+    21-byte "zeekr21" (verified against the vendor app on a single-phase 7 kW
+    Neo over a 281 s charge: 14.5 A, 233.6 V, 0.261 kWh):
     - byte 0: state code (0x06 = charging)
-    - byte 1: port hint (port index repeated at byte 19)
-    - bytes 2-5: session sequence number (LE)
-    - bytes 6-7: status/phase bitfield (0 = single phase)
-    - bytes 8-9: line voltage, 0.01 V units (LE)
-    - byte 12: current, 0.1 A units (newer firmware: LE 0.01 A over bytes 12-13)
-    - bytes 14-15: session energy, 0.01 kWh units (LE)
-    - bytes 15-16: session runtime, seconds (BE)
-    - byte 19: port index; on single-phase units, internal temperature in degC
-    - byte 20: checksum / rolling counter
-    - byte 31 (when present): temperature for multi-phase payloads
+    - byte 1: port
+    - bytes 2-5: session sequence number (constant within a session)
+    - bytes 6-7: session energy, 0.01 kWh, counting up from 0 each session
+    - bytes 8-9: line voltage, 0.01 V
+    - bytes 10-11: reserved (0)
+    - bytes 12-13: current, 0.01 A
+    - bytes 14-17: session runtime, seconds
+    - bytes 18-19: constants (15, 1)
+    - byte 20: internal temperature, degC (inferred: constant 30, no other
+      plausible byte)
+
+    33-byte "v33" (firmware V1.1.0): see _parse_b5_telemetry_v33.
+
+    Reading the 21-byte frame the older way (energy at 14-15, runtime at
+    15-16, "phase flags" at 6-7) reported the runtime as energy and the
+    energy as phase flags.
     """
 
     state: int
@@ -191,6 +201,7 @@ class B5Telemetry:
     port_hint: int = 0
     checksum: int = 0
     temperature_c: Optional[int] = None
+    layout: str = "zeekr21"
 
     @property
     def voltage_v(self) -> float:
@@ -532,60 +543,41 @@ def _parse_b5_telemetry_v33(payload: bytes) -> Optional[B5Telemetry]:
             port_hint=payload[1],
             checksum=payload[30],  # configured current limit mirror
             temperature_c=payload[32],
+            layout="v33",
         )
     except Exception:  # noqa: BLE001
         _LOGGER.warning("Failed to parse 33-byte B5 telemetry: %s", payload.hex().upper())
         return None
 
 
+def _parse_b5_telemetry_zeekr21(payload: bytes) -> Optional[B5Telemetry]:
+    """Parse the 21-byte 0xB5 telemetry payload (layout in B5Telemetry)."""
+    try:
+        return B5Telemetry(
+            state=payload[0],
+            port=payload[1],
+            sequence_number=int.from_bytes(payload[2:6], "little"),
+            energy_centikwh=int.from_bytes(payload[6:8], "little"),
+            voltage_centi_v=int.from_bytes(payload[8:10], "little"),
+            current_centi_a=int.from_bytes(payload[12:14], "little"),
+            runtime_seconds=int.from_bytes(payload[14:18], "little"),
+            phase_flags=0,
+            port_hint=payload[1],
+            temperature_c=payload[20],
+            layout="zeekr21",
+        )
+    except Exception:  # noqa: BLE001 - malformed telemetry must never crash RX path
+        _LOGGER.warning("Failed to parse 21-byte B5 telemetry: %s", payload.hex().upper())
+        return None
+
+
 def parse_b5_telemetry(payload: bytes) -> Optional[B5Telemetry]:
-    """Parse a 0xB5 telemetry payload (33-byte firmware layout, else legacy)."""
+    """Parse a 0xB5 telemetry payload: 33 bytes or more is v33, else 21-byte."""
     if len(payload) >= 33:
         return _parse_b5_telemetry_v33(payload)
     if len(payload) < 21:
         return None
-    try:
-        state = payload[0]
-        port_hint = payload[1]
-        sequence = int.from_bytes(payload[2:6], "little")
-        phase_flags = int.from_bytes(payload[6:8], "little")
-        voltage_centi_v = int.from_bytes(payload[8:10], "little")
-
-        # Newer firmware uses two-byte LE 0.01 A; older builds only populate
-        # the low byte in 0.1 A steps.
-        raw_current = int.from_bytes(payload[12:14], "little")
-        current_centi_a = raw_current if (raw_current >> 8) > 0 else payload[12] * 10
-
-        energy_centikwh = int.from_bytes(payload[14:16], "little")
-        runtime_seconds = (payload[15] << 8) | payload[16]
-
-        temperature_c: Optional[int] = None
-        port = port_hint
-        if len(payload) > 19:
-            candidate = payload[19]
-            if phase_flags == 0:
-                temperature_c = candidate
-            if 0 < candidate <= 2:
-                port = candidate
-        if phase_flags != 0 and len(payload) > 31:
-            temperature_c = payload[31]
-
-        return B5Telemetry(
-            state=state,
-            port=port,
-            sequence_number=sequence,
-            energy_centikwh=energy_centikwh,
-            voltage_centi_v=voltage_centi_v,
-            current_centi_a=current_centi_a,
-            runtime_seconds=runtime_seconds,
-            phase_flags=phase_flags,
-            port_hint=port_hint,
-            checksum=payload[20],
-            temperature_c=temperature_c,
-        )
-    except Exception:  # noqa: BLE001 — malformed telemetry must never crash RX path
-        _LOGGER.warning("Failed to parse B5 telemetry: %s", payload.hex().upper())
-        return None
+    return _parse_b5_telemetry_zeekr21(payload)
 
 
 def parse_heartbeat_state(payload: bytes) -> HeartbeatState:

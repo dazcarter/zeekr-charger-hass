@@ -184,23 +184,73 @@ class TestHeartbeatParsing(unittest.TestCase):
     def test_full_telemetry(self):
         payload = bytearray(21)
         payload[0] = 0x06  # charging
-        payload[1] = 0x00
+        payload[1] = 0x01
         payload[2:6] = (1234).to_bytes(4, "little")  # sequence
-        payload[6:8] = (0).to_bytes(2, "little")  # single phase
+        payload[6:8] = (250).to_bytes(2, "little")  # 2.50 kWh
         payload[8:10] = (23050).to_bytes(2, "little")  # 230.50 V
-        payload[12] = 160  # 16.0 A (0.1A units, low byte only)
-        payload[14:16] = (250).to_bytes(2, "little")  # 2.50 kWh
-        payload[19] = 42  # temperature on single-phase
-        payload[20] = 0x77
+        payload[12:14] = (1600).to_bytes(2, "little")  # 16.00 A
+        payload[14:18] = (3600).to_bytes(4, "little")  # 1 h runtime
+        payload[20] = 42  # temperature
         state = protocol.parse_heartbeat_state(bytes(payload))
         self.assertTrue(state.charging)
         t = state.telemetry
         self.assertIsNotNone(t)
+        self.assertEqual(t.layout, "zeekr21")
         self.assertAlmostEqual(t.voltage_v, 230.5)
         self.assertAlmostEqual(t.current_a, 16.0)
         self.assertAlmostEqual(t.session_energy_kwh, 2.5)
+        self.assertEqual(t.runtime_seconds, 3600)
         self.assertEqual(t.sequence_number, 1234)
         self.assertEqual(state.temperature_c, 42)
+
+    # Real frames from a single-phase 7 kW Neo over a 281 s charge, captured via
+    # an ESPHome proxy (upstream geoffwatts/zeekr_evse_hass, 2026-10-02). The
+    # vendor app showed 14.5 A, 233.6 V and 0.261 kWh when charging stopped.
+    ZEEKR21_CAPTURE = (
+        # payload hex, energy kWh, voltage V, current A, runtime s
+        ("06002b9abf6a0000fc5d00002b00010000000f011e", 0.00, 240.60, 0.43, 1),
+        ("06009d0ca7590d007c5b0000ad058e0000000f011e", 0.13, 234.20, 14.53, 142),
+        ("06009d0ca7591a007c5b0000ab05190100000f011e", 0.26, 234.20, 14.51, 281),
+    )
+
+    def test_real_21byte_telemetry_capture(self):
+        for hex_, energy, volts, amps, runtime in self.ZEEKR21_CAPTURE:
+            with self.subTest(runtime=runtime):
+                t = protocol.parse_b5_telemetry(bytes.fromhex(hex_))
+                self.assertIsNotNone(t)
+                self.assertEqual(t.layout, "zeekr21")
+                self.assertEqual(t.state, 0x06)
+                self.assertAlmostEqual(t.session_energy_kwh, energy)
+                self.assertAlmostEqual(t.voltage_v, volts)
+                self.assertAlmostEqual(t.current_a, amps)
+                self.assertEqual(t.runtime_seconds, runtime)
+                self.assertEqual(t.phase_flags, 0)  # bytes 6-7 are energy
+                self.assertEqual(t.temperature_c, 30)
+
+    def test_21byte_energy_is_not_read_from_the_runtime_bytes(self):
+        # Regression: runtime was once read as 0.01 kWh energy, which showed
+        # 2.81 kWh for a 0.26 kWh session.
+        t = protocol.parse_b5_telemetry(bytes.fromhex(self.ZEEKR21_CAPTURE[2][0]))
+        self.assertLess(t.session_energy_kwh, 1)
+
+    def test_21byte_low_current_is_not_scaled_as_deciamps(self):
+        # 0.43 A (raw 43) must not be mistaken for the old 0.1 A low-byte form.
+        t = protocol.parse_b5_telemetry(bytes.fromhex(self.ZEEKR21_CAPTURE[0][0]))
+        self.assertAlmostEqual(t.current_a, 0.43)
+
+    def test_21byte_frame_marks_charging(self):
+        state = protocol.parse_heartbeat_state(bytes.fromhex(self.ZEEKR21_CAPTURE[1][0]))
+        self.assertEqual(state.state, "charging")
+        self.assertTrue(state.charging)
+        self.assertEqual(state.temperature_c, 30)
+
+    def test_end_of_session_summary_is_a_state_frame(self):
+        # 8 bytes: state 08 (finishing), port 1, 0.26 kWh, 283 s.
+        state = protocol.parse_heartbeat_state(bytes.fromhex("08011a001b010000"))
+        self.assertEqual(state.state, "finishing")
+        self.assertTrue(state.car_connected)
+        self.assertFalse(state.charging)
+        self.assertEqual(state.port, 1)
 
     def test_real_33byte_telemetry_capture(self):
         """Real charging frame from hardware, firmware V1.1.0.
@@ -220,6 +270,7 @@ class TestHeartbeatParsing(unittest.TestCase):
         self.assertAlmostEqual(t.session_energy_kwh, 0.72)
         self.assertEqual(t.runtime_seconds, 674)
         self.assertEqual(t.temperature_c, 39)
+        self.assertEqual(t.layout, "v33")
         self.assertEqual(t.port, 1)
         # Single-phase unit must not be reported as multi-phase
         self.assertEqual(t.phase_flags, 0)
