@@ -342,6 +342,28 @@ state sits frozen at the last spontaneous frame. This — not any payload
 variant — is why the original investigation saw no telemetry: it was waiting
 for pushes that do not come, mostly with no car connected.
 
+## A.9 21-byte `0xB5` telemetry layout (from upstream, 2026-10-09)
+
+Captured by upstream (geoffwatts/zeekr_evse_hass `5ac26ba`) from a
+single-phase 7 kW Neo over a 281 s charge, checked against the vendor app
+(14.5 A, 233.6 V, 0.261 kWh). Replaces the §6 21-byte layout:
+
+| Bytes | Field |
+|---|---|
+| 2-5 | session sequence (constant per session) |
+| 6-7 | session energy, 0.01 kWh, **starts at 0 each session** |
+| 8-9 | voltage, 0.01 V |
+| 12-13 | current, 0.01 A |
+| 14-17 | session runtime, seconds (LE) |
+| 20 | temperature, degC (inferred: constant 30) |
+
+Because the counter starts at 0, session energy is reported as-is. A baseline
+taken when HA first sees a charging frame undercounts after a mid-session
+connect (the 33-byte capture in `tests/test_protocol.py` already shows
+0.72 kWh at 674 s and 3.87 kW, i.e. a counter that began with the session).
+
+---
+
 ---
 
 # Appendix B — Confirmed against the vendor Android app (2026-07-20)

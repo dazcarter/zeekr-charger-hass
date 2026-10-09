@@ -124,10 +124,10 @@ class ZeekrChargerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         telemetry_dict: dict[str, Any] = {}
         if telemetry:
+            # The charger's energy counter starts at 0 each session, so it is
+            # reported as-is (an offset taken on first sight undercounts when HA
+            # connects mid-session).
             session_energy = telemetry.session_energy_kwh
-            offset = self.client.get_session_energy_offset()
-            if offset is not None:
-                session_energy = max(0.0, session_energy - offset)
             telemetry_dict = {
                 **telemetry.__dict__,
                 "voltage_v": round(telemetry.voltage_v, 1),

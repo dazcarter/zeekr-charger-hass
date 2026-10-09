@@ -146,7 +146,6 @@ class ZeekrBleClient:
         self._telemetry_live: bool = False
         self._last_power_status: Optional[PowerStatus] = None
         self._charging_session_start: Optional[float] = None
-        self._session_energy_offset_kwh: Optional[float] = None
 
         # Heartbeat-payload experiment state
         self._heartbeat_variant_index = 0
@@ -575,7 +574,6 @@ class ZeekrBleClient:
         # Independent charging-session tracking
         if state.charging and self._charging_session_start is None:
             self._charging_session_start = state.timestamp
-            self._session_energy_offset_kwh = None
             _LOGGER.info("Charging session started")
         elif not state.charging and self._charging_session_start is not None:
             _LOGGER.info(
@@ -583,7 +581,6 @@ class ZeekrBleClient:
                 state.timestamp - self._charging_session_start,
             )
             self._charging_session_start = None
-            self._session_energy_offset_kwh = None
 
         # A short (non-telemetry) reply means the charger is idle and is no
         # longer reporting live measurements. Remember that, so instantaneous
@@ -593,8 +590,6 @@ class ZeekrBleClient:
 
         if state.telemetry:
             self._last_telemetry = state.telemetry
-            if state.charging and self._session_energy_offset_kwh is None:
-                self._session_energy_offset_kwh = state.telemetry.session_energy_kwh
             _LOGGER.debug(
                 "Telemetry: %.2f kWh, %.1f V, %.1f A, %ds",
                 state.telemetry.session_energy_kwh,
@@ -1025,9 +1020,6 @@ class ZeekrBleClient:
     def telemetry_is_live(self) -> bool:
         """True when the last 0xB5 reply carried live telemetry."""
         return self._telemetry_live
-
-    def get_session_energy_offset(self) -> Optional[float]:
-        return self._session_energy_offset_kwh
 
     def get_last_power_status(self) -> Optional[PowerStatus]:
         return self._last_power_status
